@@ -53,6 +53,47 @@ cmd_start() {
     fi
 
     log_success "Logos Node container started"
+
+    # #region agent log — debug session 989b70
+    _DBG_LOG="/home/strudelpi/git/github/logos/logosup/.cursor/debug-989b70.log"
+    _dbg() { printf '{"sessionId":"989b70","timestamp":%s,"location":"cmd_start.sh:%s","hypothesisId":"%s","message":"%s","data":%s}\n' \
+        "$(date +%s%3N)" "$1" "$2" "$3" "$4" >> "$_DBG_LOG" 2>/dev/null || true; }
+
+    # H2: kernel ip_forward (independent of UFW policy)
+    _ip_fwd="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)"
+    _dbg "$LINENO" "H2" "kernel ip_forward" "{\"ip_forward\":\"${_ip_fwd}\"}"
+
+    # H3/H4: MTU of bridge vs host physical interface
+    _net_id="$(docker network inspect logosnode-net --format '{{slice .Id 0 12}}' 2>/dev/null || echo "")"
+    _br_mtu="$(ip link show "br-${_net_id}" 2>/dev/null | grep -oP 'mtu \K\d+' || echo "unknown")"
+    _eth_iface="$(ip route get 65.109.51.37 2>/dev/null | grep -oP 'dev \K\S+' | head -1 || echo "unknown")"
+    _eth_mtu="$(ip link show "${_eth_iface}" 2>/dev/null | grep -oP 'mtu \K\d+' || echo "unknown")"
+    _dbg "$LINENO" "H3_H4" "MTU bridge vs host interface" "{\"bridge_mtu\":\"${_br_mtu}\",\"host_iface\":\"${_eth_iface}\",\"host_mtu\":\"${_eth_mtu}\"}"
+
+    # H1: TCP probe to bootstrap servers (tests if host is up; TCP will be refused but reachable beats timeout)
+    for _port in 3000 3001 3002 3003; do
+        _tcp="$(timeout 4 bash -c "echo >/dev/tcp/65.109.51.37/${_port}" 2>&1 && echo "connected" || echo "refused_or_timeout")"
+        _dbg "$LINENO" "H1" "TCP probe bootstrap 65.109.51.37:${_port}" "{\"port\":${_port},\"result\":\"${_tcp}\"}"
+    done
+
+    # H5: outbound UDP reachability from container (HTTPS proves TCP NAT works; test UDP separately)
+    _udp_ext="$(docker exec "$LOGOS_CONTAINER_NAME" timeout 5 sh -c 'echo hi | nc -u -w3 1.1.1.1 443 2>&1 && echo ok' 2>/dev/null || echo "nc_unavailable")"
+    _dbg "$LINENO" "H5" "container UDP NAT reachability test" "{\"result\":\"${_udp_ext}\"}"
+
+    # H4: Docker port bindings (check if 3000/udp inbound mapping exists)
+    _port_bindings="$(docker inspect "$LOGOS_CONTAINER_NAME" --format '{{json .HostConfig.PortBindings}}' 2>/dev/null || echo "{}")"
+    _dbg "$LINENO" "H4" "Docker port bindings" "{\"port_bindings\":${_port_bindings}}"
+
+    # Container external IP (what IP does the container appear to have externally)
+    _ext_ip="$(docker exec "$LOGOS_CONTAINER_NAME" timeout 5 curl -sf https://api.ipify.org 2>/dev/null || echo "failed")"
+    _dbg "$LINENO" "H3" "container external IP" "{\"external_ip\":\"${_ext_ip}\"}"
+
+    # Node listen addresses from API (after a brief settle)
+    sleep 2
+    _net_info="$(curl -sf "http://localhost:${LOGOS_API_PORT}/network/info" 2>/dev/null || echo "null")"
+    _dbg "$LINENO" "H3" "node network/info" "${_net_info:-null}"
+    # #endregion agent log
+
     log_info "Waiting for node to initialize..."
 
     local health_rc

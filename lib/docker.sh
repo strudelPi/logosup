@@ -139,6 +139,9 @@ services:
 networks:
   logosnode-net:
     name: logosnode-net
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
 YAML
 
     log_success "Generated docker-compose.yml"
